@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Text Recognition Tool</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/2.1.1/tesseract.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f4f8;
+            color: #333;
+            text-align: center;
+            padding: 20px;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+            color: #4a90e2;
+        }
+
+        #fileInput, #captureButton {
+            padding: 15px 30px;
+            font-size: 16px;
+            border: none;
+            border-radius: 25px;
+            margin: 10px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        #fileInput {
+            background-color: #5cb85c;
+            color: white;
+        }
+
+        #fileInput:hover {
+            background-color: #4cae4c;
+        }
+
+        #captureButton {
+            background-color: #f0ad4e;
+            color: white;
+        }
+
+        #captureButton:hover {
+            background-color: #ec971f;
+        }
+
+        #canvasContainer {
+            position: relative;
+            display: inline-block;
+            border: 5px solid #4a90e2;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-top: 20px;
+        }
+
+        #uploadedCanvas {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        #selection {
+            position: absolute;
+            border: 2px dashed red;
+            pointer-events: none;
+            display: none;
+        }
+
+        video {
+            display: none;
+            border: 2px solid #4a90e2;
+            border-radius: 15px;
+            margin-top: 20px;
+        }
+
+        @media (max-width: 768px) {
+            #fileInput, #captureButton {
+                width: 100%;
+                margin: 5px 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>Upload an Image and Select Area to Scan for Text</h1>
+    <input type="file" id="fileInput" accept="image/*">
+    <button id="captureButton">Capture Image</button>
+    <video id="video" width="640" height="480" autoplay></video>
+    <br>
+    <canvas id="capturedCanvas" style="display:none;"></canvas>
+    <div id="canvasContainer">
+        <canvas id="uploadedCanvas"></canvas>
+        <div id="selection"></div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const uploadedCanvas = document.getElementById('uploadedCanvas');
+        const selection = document.getElementById('selection');
+        const ctx = uploadedCanvas.getContext('2d');
+        const captureButton = document.getElementById('captureButton');
+        const video = document.getElementById('video');
+        const capturedCanvas = document.getElementById('capturedCanvas');
+        const capturedCtx = capturedCanvas.getContext('2d');
+
+        let isSelecting = false;
+        let startX, startY, endX, endY, imageWidth, imageHeight;
+        let translations = {};
+
+        // Load JSON translation data
+        fetch('e2b.json')
+            .then(response => response.json())
+            .then(data => {
+                translations = data.reduce((acc, item) => {
+                    acc[item.en] = item.bn;
+                    return acc;
+                }, {});
+            })
+            .catch(err => console.error("Error loading translation data: ", err));
+
+        // Handle image upload
+        fileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        imageWidth = img.naturalWidth;
+                        imageHeight = img.naturalHeight;
+                        uploadedCanvas.width = imageWidth;
+                        uploadedCanvas.height = imageHeight;
+
+                        ctx.drawImage(img, 0, 0, imageWidth, imageHeight);
+                        selection.style.display = 'none';
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Start camera
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+                video.style.display = 'block';
+            } catch (err) {
+                console.error("Error accessing camera: ", err);
+            }
+        }
+
+        // Capture image from the video feed
+        captureButton.addEventListener('click', () => {
+            capturedCanvas.width = video.videoWidth;
+            capturedCanvas.height = video.videoHeight;
+            capturedCtx.drawImage(video, 0, 0);
+            const imageData = capturedCanvas.toDataURL();
+
+            // Stop the camera stream
+            const stream = video.srcObject;
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            video.style.display = 'none';
+
+            // Load the captured image onto the main canvas
+            const img = new Image();
+            img.onload = () => {
+                uploadedCanvas.width = img.naturalWidth;
+                uploadedCanvas.height = img.naturalHeight;
+                ctx.drawImage(img, 0, 0);
+                selection.style.display = 'none';
+            };
+            img.src = imageData;
+        });
+
+        // Handle mouse events for selection on the canvas
+        uploadedCanvas.addEventListener('mousedown', (event) => {
+            isSelecting = true;
+            startX = event.offsetX;
+            startY = event.offsetY;
+            endX = startX;
+            endY = startY;
+
+            selection.style.display = 'block';
+            selection.style.left = startX + 'px';
+            selection.style.top = startY + 'px';
+            selection.style.width = '0px';
+            selection.style.height = '0px';
+        });
+
+        uploadedCanvas.addEventListener('mousemove', (event) => {
+            if (!isSelecting) return;
+
+            endX = event.offsetX;
+            endY = event.offsetY;
+
+            selection.style.left = Math.min(startX, endX) + 'px';
+            selection.style.top = Math.min(startY, endY) + 'px';
+            selection.style.width = Math.abs(endX - startX) + 'px';
+            selection.style.height = Math.abs(endY - startY) + 'px';
+        });
+
+        uploadedCanvas.addEventListener('mouseup', () => {
+            isSelecting = false;
+
+            const x = Math.min(startX, endX);
+            const y = Math.min(startY, endY);
+            const width = Math.abs(endX - startX);
+            const height = Math.abs(endY - startY);
+
+            if (width > 0 && height > 0) {
+                const selectedCanvas = document.createElement('canvas');
+                const selectedCtx = selectedCanvas.getContext('2d');
+                selectedCanvas.width = width;
+                selectedCanvas.height = height;
+
+                selectedCtx.drawImage(uploadedCanvas, x, y, width, height, 0, 0, width, height);
+
+                Tesseract.recognize(
+                    selectedCanvas.toDataURL(),
+                    'eng',
+                    {
+                        logger: info => console.log(info)
+                    }
+                ).then(({ data: { text } }) => {
+                    const words = text.trim().split(/\s+/);
+                    const meanings = words.map(word => {
+                        const meaning = translations[word.toLowerCase()];
+                        return meaning ? `${word}: ${meaning}` : `${word}: No meaning found`;
+                    }).join('\n');
+
+                    alert(meanings);
+                }).catch(err => {
+                    console.error("Error recognizing text: ", err);
+                    alert("Error recognizing text.");
+                });
+            } else {
+                alert("Please select a valid area.");
+            }
+
+            selection.style.display = 'none';
+        });
+
+        // Start the camera when the page loads
+        window.addEventListener('load', startCamera);
+    </script>
+</body>
+</html>
